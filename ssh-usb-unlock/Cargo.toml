@@ -1,0 +1,16 @@
+[package]
+name = "ssh-usb-unlock"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-Trust SSH client helper: fetches 60m ephemeral Ed25519 seed from Mobile USB Enclave into ssh-agent RAM"
+
+[dependencies]
+ed25519-dalek = "2.1"
+ssh-key = { version = "0.6", features = ["ed25519", "encryption"] }
+x25519-dalek = { version = "2.0", features = ["reusable_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = { version = "1.8", features = ["derive"] }
+libc = "0.2"

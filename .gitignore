@@ -1,0 +1,51 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# BLAST & indexers
+.rpgrep/
+.claude/last-manifest.json
+.claude/.manifest-stamped
+.claude/threads/
+
+# Secrets
+*.key
+*.pem
+
+PLAN-SCHEMA.md
+.agents/agents/prompt-architect.md
+.agents/agents/setup-guardian.md
+.agents/skills/setup-workspace
+.agents/skills/prompt-sculptor
+.agents/skills/triage-sculptor
+.agents/skills/generate-docs
+.claude/agents/prompt-architect.md
+.claude/agents/setup-guardian.md
+.claude/hooks/blast-watch-start.sh
+.claude/hooks/blast-watch-stop.sh
+.claude/hooks/blast-watch-health.sh
+.claude/hooks/blast-require-search.sh
+.claude/hooks/blast-require-plan-schema.sh
+.claude/hooks/blast-require-plan-schema-blocklist-check.sh
+.claude/hooks/blast-goal-stop.sh
+.claude/hooks/blast-no-raw-search.sh
+.claude/hooks/blast-require-thread.sh
+.claude/hooks/blast-require-rtk.sh
+.claude/hooks/blast-rtk-lists.json
+.claude/hooks/blast-require-clear.sh
+.claude/hooks/blast-telemetry-upload.sh
+.claude/hooks/prepare-commit-msg
+.claude/hooks/blast-version-check.sh
+.claude/hooks/blast-gate-health.sh
+.claude/hooks/blast-config-change.sh
+.claude/hooks/blast-instructions-loaded.sh
+.claude/hooks/blast-gemini-hook-adapter.sh
+.claude/hooks/blast-pre-compact.sh
+.claude/skills/setup-workspace
+.claude/skills/prompt-sculptor
+.claude/skills/triage-sculptor
+.claude/skills/generate-docs

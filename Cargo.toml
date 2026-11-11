@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "sshd-epoch-auth",
+    "ssh-usb-unlock",
+]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
