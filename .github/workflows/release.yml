@@ -11,6 +11,21 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      platforms:
+        description: "Plataformas a ejecutar (all, linux, macos, windows)"
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - all
+          - linux
+          - macos
+          - windows
+      publish:
+        description: "Publicar/actualizar GitHub Release"
+        required: false
+        type: boolean
+        default: true
       tag:
         description: "Tag del release (vacío = v<version> de ssh-usb-unlock/Cargo.toml)"
         required: false
@@ -25,23 +40,60 @@ permissions:
   contents: read
 
 jobs:
+  prepare:
+    name: Resolve target platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        shell: bash
+        env:
+          SELECTED: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'all' }}
+        run: |
+          set -euo pipefail
+          ALL='[
+            {"platform":"linux","os":"ubuntu-latest","targets":"x86_64-unknown-linux-musl aarch64-unknown-linux-musl","use_zig":true,"archive_ext":"tar.gz"},
+            {"platform":"macos","os":"macos-latest","targets":"aarch64-apple-darwin x86_64-apple-darwin","use_zig":false,"archive_ext":"tar.gz"},
+            {"platform":"windows","os":"windows-latest","targets":"x86_64-pc-windows-msvc aarch64-pc-windows-msvc","use_zig":false,"archive_ext":"zip"}
+          ]'
+          if [[ "$SELECTED" == "all" ]]; then
+            MATRIX="$(jq -c '.' <<< "$ALL")"
+          else
+            MATRIX="$(jq -c --arg p "$SELECTED" '[.[] | select(.platform == $p)]' <<< "$ALL")"
+          fi
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "Selected matrix: ${MATRIX}"
+
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.platform }})
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        id: rust
+        shell: bash
+        run: bash scripts/ci/setup-rust.sh
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ steps.rust.outputs.rustc_hash }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-${{ steps.rust.outputs.rustc_hash }}-
 
       - name: Run unit tests (Unix workspace)
         if: runner.os != 'Windows'
@@ -51,9 +103,13 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p ssh-usb-unlock
 
-      - name: Validate install.sh syntax
+      - name: Validate shell scripts syntax
         if: runner.os != 'Windows'
-        run: sh -n scripts/install.sh
+        run: |
+          sh -n scripts/install.sh
+          bash -n scripts/ci/setup-rust.sh
+          bash -n scripts/ci/clean-cargo-cache.sh
+          bash -n scripts/ci/install-zig-tools.sh
 
       - name: Smoke test CLI self-install & link (Unix)
         if: runner.os != 'Windows'
@@ -100,98 +156,125 @@ jobs:
             Remove-Item -Path $tmpSsh -Recurse -Force -ErrorAction SilentlyContinue
           }
 
+      - name: Clean workspace artifacts before cache save
+        shell: bash
+        run: bash scripts/ci/clean-cargo-cache.sh
+
   build:
-    name: Build (${{ matrix.target }})
-    needs: test
+    name: Build (${{ matrix.platform }})
+    needs: [prepare, test]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            use_zig: false
-            archive_ext: tar.gz
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            use_zig: false
-            archive_ext: tar.gz
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            use_zig: true
-            archive_ext: tar.gz
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            use_zig: true
-            archive_ext: tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            use_zig: false
-            archive_ext: zip
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            use_zig: false
-            archive_ext: zip
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust (${{ matrix.target }})
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Setup Rust (${{ matrix.platform }})
+        id: rust
+        shell: bash
+        run: |
+          ARGS=()
+          for t in ${{ matrix.targets }}; do
+            ARGS+=(--target "$t")
+          done
+          bash scripts/ci/setup-rust.sh "${ARGS[@]}"
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v4
         with:
-          key: ${{ matrix.target }}
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-build-${{ matrix.platform }}-${{ steps.rust.outputs.rustc_hash }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-${{ matrix.platform }}-${{ steps.rust.outputs.rustc_hash }}-
 
-      - name: Install zig & cargo-zigbuild
+      - name: Cache Zig & cargo-zigbuild tools
         if: matrix.use_zig
-        uses: taiki-e/install-action@v2
+        uses: actions/cache@v4
         with:
-          tool: cargo-zigbuild,zig
+          path: ~/.local/zig-tools
+          key: ${{ runner.os }}-zig-tools-${{ hashFiles('scripts/ci/install-zig-tools.sh') }}
 
-      - name: Build release binary (zigbuild musl)
+      - name: Setup Zig & cargo-zigbuild
         if: matrix.use_zig
-        run: cargo zigbuild --release -p ssh-usb-unlock --target ${{ matrix.target }}
+        shell: bash
+        run: bash scripts/ci/install-zig-tools.sh
 
-      - name: Build release binary (native/cross)
-        if: "!matrix.use_zig"
-        run: cargo build --release -p ssh-usb-unlock --target ${{ matrix.target }}
+      - name: Cache Zig & cargo-zigbuild build cache
+        if: matrix.use_zig
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/zig
+            ~/.cache/cargo-zigbuild
+          key: ${{ runner.os }}-zig-build-cache-${{ matrix.platform }}-${{ hashFiles('scripts/ci/install-zig-tools.sh', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-build-cache-${{ matrix.platform }}-
 
-      - name: Package Unix archive
+      - name: Build & package Unix targets
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
         run: |
           set -euo pipefail
-          BIN="target/${{ matrix.target }}/release/ssh-usb-unlock"
-          chmod 755 "$BIN"
-          tar -czf "ssh-usb-unlock-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" ssh-usb-unlock
+          mkdir -p dist
+          for TARGET in ${{ matrix.targets }}; do
+            echo "::group::Building ${TARGET}"
+            if [[ "${{ matrix.use_zig }}" == "true" ]]; then
+              cargo zigbuild --release -p ssh-usb-unlock --target "$TARGET"
+            else
+              cargo build --release -p ssh-usb-unlock --target "$TARGET"
+            fi
+            BIN="target/${TARGET}/release/ssh-usb-unlock"
+            chmod 755 "$BIN"
+            tar -czf "dist/ssh-usb-unlock-${TARGET}.tar.gz" -C "target/${TARGET}/release" ssh-usb-unlock
+            echo "::endgroup::"
+          done
 
-      - name: Package Windows archive
+      - name: Build & package Windows targets
         if: matrix.archive_ext == 'zip'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Compress-Archive `
-            -Path "target/${{ matrix.target }}/release/ssh-usb-unlock.exe" `
-            -DestinationPath "ssh-usb-unlock-${{ matrix.target }}.zip" `
-            -Force
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          foreach ($target in ("${{ matrix.targets }}" -split '\s+')) {
+            Write-Host "::group::Building $target"
+            cargo build --release -p ssh-usb-unlock --target $target
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Compress-Archive `
+              -Path "target\$target\release\ssh-usb-unlock.exe" `
+              -DestinationPath "dist\ssh-usb-unlock-$target.zip" `
+              -Force
+            Write-Host "::endgroup::"
+          }
 
-      - name: Upload build artifact
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ssh-usb-unlock-${{ matrix.target }}
-          path: ssh-usb-unlock-${{ matrix.target }}.${{ matrix.archive_ext }}
+          name: ssh-usb-unlock-${{ matrix.platform }}
+          path: dist/ssh-usb-unlock-*.${{ matrix.archive_ext }}
           if-no-files-found: error
+
+      - name: Clean workspace artifacts before cache save
+        shell: bash
+        run: |
+          ARGS=(--release)
+          for t in ${{ matrix.targets }}; do
+            ARGS+=(--target "$t")
+          done
+          bash scripts/ci/clean-cargo-cache.sh "${ARGS[@]}"
 
   release:
     name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -205,19 +288,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-
-      - name: Include installer scripts & compute SHA256SUMS
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp scripts/install.sh dist/install.sh
-          cp scripts/install.ps1 dist/install.ps1
-          chmod 755 dist/install.sh
-          (
-            cd dist
-            sha256sum ssh-usb-unlock-*.tar.gz ssh-usb-unlock-*.zip install.sh install.ps1 > SHA256SUMS.txt
-          )
-          cat dist/SHA256SUMS.txt
 
       - name: Resolve release tag
         id: meta
@@ -235,6 +305,45 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
         env:
           INPUT_TAG: ${{ inputs.tag }}
+
+      - name: Include installer scripts & compute SHA256SUMS
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cp scripts/install.sh dist/install.sh
+          cp scripts/install.ps1 dist/install.ps1
+          chmod 755 dist/install.sh
+
+          NEW_SUMS="$(mktemp)"
+          EXISTING_SUMS="$(mktemp)"
+          trap 'rm -f "$NEW_SUMS" "$EXISTING_SUMS"' EXIT
+
+          (
+            cd dist
+            FILES=(ssh-usb-unlock-*.tar.gz ssh-usb-unlock-*.zip install.sh install.ps1)
+            sha256sum "${FILES[@]}" > "$NEW_SUMS"
+          )
+
+          if [[ "$PLATFORMS" != "all" ]] && gh release download "$TAG" -p "SHA256SUMS.txt" -O "$EXISTING_SUMS" 2>/dev/null; then
+            NEW_NAMES="$(awk '{print $2}' "$NEW_SUMS")"
+            {
+              while IFS= read -r line; do
+                fname="$(awk '{print $2}' <<< "$line")"
+                if [[ -n "$fname" ]] && ! grep -Fqx "$fname" <<< "$NEW_NAMES"; then
+                  echo "$line"
+                fi
+              done < "$EXISTING_SUMS"
+              cat "$NEW_SUMS"
+            } | sort -k2 > dist/SHA256SUMS.txt
+          else
+            sort -k2 "$NEW_SUMS" > dist/SHA256SUMS.txt
+          fi
+          cat dist/SHA256SUMS.txt
 
       - name: Create or update GitHub Release
         shell: bash
