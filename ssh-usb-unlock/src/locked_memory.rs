@@ -1,10 +1,23 @@
 use std::ops::{Deref, DerefMut};
 use zeroize::Zeroize;
 
+#[cfg(windows)]
+mod win_mem {
+    use core::ffi::c_void;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn VirtualLock(lp_address: *mut c_void, dw_size: usize) -> i32;
+        pub fn VirtualUnlock(lp_address: *mut c_void, dw_size: usize) -> i32;
+    }
+}
+
 /// Endurece el proceso actual a nivel de kernel:
-/// 1. Prohíbe volcados de memoria (RLIMIT_CORE = 0).
-/// 2. Bloquea adjuntar debuggers (PT_DENY_ATTACH en macOS / PR_SET_DUMPABLE = 0 en Linux).
+/// - Unix: prohíbe volcados de memoria (`RLIMIT_CORE = 0`) y bloquea debuggers
+///   (`PT_DENY_ATTACH` en macOS / `PR_SET_DUMPABLE = 0` en Linux).
+/// - Windows: no-op (los volcados no están activos por defecto en procesos de usuario).
 pub fn harden_process() {
+    #[cfg(unix)]
     unsafe {
         let rlim = libc::rlimit {
             rlim_cur: 0,
@@ -24,7 +37,8 @@ pub fn harden_process() {
     }
 }
 
-/// Buffer RAII de tamaño fijo bloqueado en RAM física con `mlock` y limpiado con `zeroize` al destruirse.
+/// Buffer RAII de tamaño fijo bloqueado en RAM física (`mlock` en Unix / `VirtualLock` en Windows)
+/// y limpiado con `zeroize` al destruirse.
 pub struct LockedBuffer<const N: usize> {
     data: Box<[u8; N]>,
 }
@@ -32,6 +46,8 @@ pub struct LockedBuffer<const N: usize> {
 impl<const N: usize> LockedBuffer<N> {
     pub fn new() -> Self {
         let mut data = Box::new([0u8; N]);
+
+        #[cfg(unix)]
         unsafe {
             let ptr = data.as_mut_ptr() as *mut libc::c_void;
             libc::mlock(ptr, N);
@@ -42,6 +58,13 @@ impl<const N: usize> LockedBuffer<N> {
             #[cfg(target_os = "linux")]
             libc::madvise(ptr, N, libc::MADV_DONTDUMP);
         }
+
+        #[cfg(windows)]
+        unsafe {
+            let ptr = data.as_mut_ptr() as *mut core::ffi::c_void;
+            win_mem::VirtualLock(ptr, N);
+        }
+
         Self { data }
     }
 }
@@ -69,9 +92,17 @@ impl<const N: usize> DerefMut for LockedBuffer<N> {
 impl<const N: usize> Drop for LockedBuffer<N> {
     fn drop(&mut self) {
         self.data.zeroize();
+
+        #[cfg(unix)]
         unsafe {
             let ptr = self.data.as_mut_ptr() as *mut libc::c_void;
             libc::munlock(ptr, N);
+        }
+
+        #[cfg(windows)]
+        unsafe {
+            let ptr = self.data.as_mut_ptr() as *mut core::ffi::c_void;
+            win_mem::VirtualUnlock(ptr, N);
         }
     }
 }

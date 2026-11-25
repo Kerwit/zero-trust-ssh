@@ -17,24 +17,93 @@ const ENCLAVE_ADDR: &str = "127.0.0.1:9422";
 const TUNNEL_SALT: &[u8] = b"USB-TUNNEL-SALT-V1";
 const TUNNEL_INFO: &[u8] = b"CHACHA20POLY1305-SESSION-KEY";
 
-/// Prepara el reenvío de puertos por cable USB (silencioso para no ensuciar stdout de OpenSSH)
-fn ensure_usb_port_forward() {
-    let mut candidates = vec!["adb".to_string()];
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(format!("{}/Library/Android/sdk/platform-tools/adb", home));
+/// Devuelve rutas candidatas a `adb` según el sistema operativo actual.
+pub fn adb_candidates() -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut push_unique = |path: String| {
+        if !path.is_empty() && !candidates.iter().any(|c| c == &path) {
+            candidates.push(path);
+        }
+    };
+
+    #[cfg(windows)]
+    {
+        push_unique("adb.exe".to_string());
+        push_unique("adb".to_string());
+        for var in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+            if let Ok(sdk) = std::env::var(var) {
+                push_unique(format!("{}\\platform-tools\\adb.exe", sdk.trim_end_matches('\\')));
+            }
+        }
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            push_unique(format!(
+                "{}\\Android\\Sdk\\platform-tools\\adb.exe",
+                local_app_data.trim_end_matches('\\')
+            ));
+        }
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            push_unique(format!(
+                "{}\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe",
+                profile.trim_end_matches('\\')
+            ));
+        }
     }
-    for candidate in candidates {
-        if let Ok(status) = Command::new(&candidate)
+
+    #[cfg(not(windows))]
+    {
+        push_unique("adb".to_string());
+        for var in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+            if let Ok(sdk) = std::env::var(var) {
+                push_unique(format!("{}/platform-tools/adb", sdk.trim_end_matches('/')));
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let home = home.trim_end_matches('/');
+            #[cfg(target_os = "macos")]
+            push_unique(format!("{}/Library/Android/sdk/platform-tools/adb", home));
+            #[cfg(not(target_os = "macos"))]
+            push_unique(format!("{}/Android/Sdk/platform-tools/adb", home));
+        }
+        push_unique("/usr/local/bin/adb".to_string());
+        push_unique("/usr/bin/adb".to_string());
+    }
+
+    candidates
+}
+
+/// Intenta activar `adb forward tcp:9422 tcp:9422` y devuelve el binario usado o un diagnóstico.
+pub fn try_adb_forward() -> Result<String, String> {
+    let mut found_adb: Option<String> = None;
+    for candidate in adb_candidates() {
+        match Command::new(&candidate)
             .args(["forward", "tcp:9422", "tcp:9422"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
         {
-            if status.success() {
-                break;
+            Ok(status) if status.success() => return Ok(candidate),
+            Ok(_) => {
+                if found_adb.is_none() {
+                    found_adb = Some(candidate);
+                }
             }
+            Err(_) => continue,
         }
     }
+
+    if let Some(bin) = found_adb {
+        Err(format!(
+            "'{}' encontrado, pero no se detectó dispositivo Android conectado por USB (o falta autorizar depuración USB).",
+            bin
+        ))
+    } else {
+        Err("No se encontró 'adb' en PATH ni en las rutas estándar de Android SDK.".to_string())
+    }
+}
+
+/// Prepara el reenvío de puertos por cable USB (silencioso para no ensuciar stdout de OpenSSH)
+fn ensure_usb_port_forward() {
+    let _ = try_adb_forward();
 }
 
 /// Solicita al Enclave Móvil por cable USB los 32 bytes de `EphemeralSeed` para la hora actual

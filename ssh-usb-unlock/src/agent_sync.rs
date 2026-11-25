@@ -80,17 +80,55 @@ pub fn inject_ephemeral_key_to_agent(
     // TTL sincronizado con el fin de la hora actual + 60s de solape
     let remaining_secs = 3600 - (now_secs % 3600) + 60;
 
-    let mut child = Command::new("ssh-add")
-        .args(["-q", "-t", &remaining_secs.to_string(), "-"])
+    match run_ssh_add_stdin(openssh_pem.as_bytes(), Some(remaining_secs)) {
+        Ok(()) => {
+            eprintln!(
+                "🔓 [Zero-Trust SSH] Clave efímera inyectada en RAM para '{}@{}' (expira en {} min).",
+                user,
+                host_id,
+                remaining_secs / 60
+            );
+            Ok(())
+        }
+        Err(first_err) => {
+            // En Windows, el servicio nativo OpenSSH ssh-agent puede rechazar `-t <ttl>`.
+            if cfg!(windows) {
+                run_ssh_add_stdin(openssh_pem.as_bytes(), None).map_err(|second_err| {
+                    format!(
+                        "{} (fallback sin TTL también falló: {})",
+                        first_err, second_err
+                    )
+                })?;
+                eprintln!(
+                    "🔓 [Zero-Trust SSH] Clave efímera inyectada en RAM para '{}@{}' (Windows ssh-agent sin TTL; se purgará automáticamente al cambiar de hora).",
+                    user, host_id
+                );
+                Ok(())
+            } else {
+                Err(first_err)
+            }
+        }
+    }
+}
+
+fn run_ssh_add_stdin(pem_bytes: &[u8], ttl_secs: Option<u64>) -> Result<(), String> {
+    let mut cmd = Command::new("ssh-add");
+    cmd.arg("-q");
+    if let Some(secs) = ttl_secs {
+        cmd.args(["-t", &secs.to_string()]);
+    }
+    cmd.arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("No se pudo lanzar ssh-add: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
-            .write_all(openssh_pem.as_bytes())
+            .write_all(pem_bytes)
             .map_err(|e| format!("Error enviando clave por pipe a ssh-add: {}", e))?;
     }
 
@@ -100,15 +138,11 @@ pub fn inject_ephemeral_key_to_agent(
 
     if !output.status.success() {
         let err_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ssh-add rechazó la clave en RAM: {}", err_msg.trim()));
+        return Err(format!(
+            "ssh-add rechazó la clave en RAM: {}",
+            err_msg.trim()
+        ));
     }
-
-    eprintln!(
-        "🔓 [Zero-Trust SSH] Clave efímera inyectada en RAM para '{}@{}' (expira en {} min).",
-        user,
-        host_id,
-        remaining_secs / 60
-    );
 
     Ok(())
 }

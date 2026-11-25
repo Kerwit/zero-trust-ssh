@@ -1,0 +1,283 @@
+name: Release Multi-Platform CLI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag del release (vacío = v<version> de ssh-usb-unlock/Cargo.toml)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Marcar como prerelease"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run unit tests (Unix workspace)
+        if: runner.os != 'Windows'
+        run: cargo test --workspace
+
+      - name: Run unit tests (Windows CLI)
+        if: runner.os == 'Windows'
+        run: cargo test -p ssh-usb-unlock
+
+      - name: Validate install.sh syntax
+        if: runner.os != 'Windows'
+        run: sh -n scripts/install.sh
+
+      - name: Smoke test CLI self-install & link (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p ssh-usb-unlock
+          TMP_SSH="$(mktemp -d)"
+          trap 'rm -rf "$TMP_SSH"' EXIT
+          export ZT_SSH_DIR="$TMP_SSH"
+          ./target/debug/ssh-usb-unlock --version
+          ./target/debug/ssh-usb-unlock install --no-path
+          test -x "$TMP_SSH/ssh-usb-unlock"
+          "$TMP_SSH/ssh-usb-unlock" link \
+            --host 192.168.1.33 --port 22 --alias ci-srv \
+            --host-id cisrv --user ubuntu --generation 1 \
+            --skip-keyscan --skip-test --no-interactive
+          "$TMP_SSH/ssh-usb-unlock" list | grep -q "ci-srv"
+          "$TMP_SSH/ssh-usb-unlock" unlink ci-srv
+          "$TMP_SSH/ssh-usb-unlock" uninstall --keep-path
+          test ! -e "$TMP_SSH/ssh-usb-unlock"
+
+      - name: Smoke test CLI self-install & link (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build -p ssh-usb-unlock
+          $tmpSsh = Join-Path ([System.IO.Path]::GetTempPath()) ("zt-ssh-ci-" + [System.Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $tmpSsh -Force | Out-Null
+          try {
+            $env:ZT_SSH_DIR = $tmpSsh
+            .\target\debug\ssh-usb-unlock.exe --version
+            .\target\debug\ssh-usb-unlock.exe install --no-path
+            $installed = Join-Path $tmpSsh "ssh-usb-unlock.exe"
+            if (-not (Test-Path $installed)) { throw "Binary not installed at $installed" }
+            & $installed link --host 192.168.1.33 --port 22 --alias ci-srv --host-id cisrv --user ubuntu --generation 1 --skip-keyscan --skip-test --no-interactive
+            $listed = & $installed list
+            if (-not ($listed -match "ci-srv")) { throw "ci-srv not listed" }
+            & $installed unlink ci-srv
+            .\target\debug\ssh-usb-unlock.exe uninstall --keep-path
+            if (Test-Path $installed) { throw "Binary still exists after uninstall" }
+          } finally {
+            Remove-Item -Path $tmpSsh -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_zig: false
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use_zig: false
+            archive_ext: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_zig: true
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_zig: true
+            archive_ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_zig: false
+            archive_ext: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            use_zig: false
+            archive_ext: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install zig & cargo-zigbuild
+        if: matrix.use_zig
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,zig
+
+      - name: Build release binary (zigbuild musl)
+        if: matrix.use_zig
+        run: cargo zigbuild --release -p ssh-usb-unlock --target ${{ matrix.target }}
+
+      - name: Build release binary (native/cross)
+        if: "!matrix.use_zig"
+        run: cargo build --release -p ssh-usb-unlock --target ${{ matrix.target }}
+
+      - name: Package Unix archive
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/ssh-usb-unlock"
+          chmod 755 "$BIN"
+          tar -czf "ssh-usb-unlock-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" ssh-usb-unlock
+
+      - name: Package Windows archive
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Compress-Archive `
+            -Path "target/${{ matrix.target }}/release/ssh-usb-unlock.exe" `
+            -DestinationPath "ssh-usb-unlock-${{ matrix.target }}.zip" `
+            -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-usb-unlock-${{ matrix.target }}
+          path: ssh-usb-unlock-${{ matrix.target }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Include installer scripts & compute SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/install.sh dist/install.sh
+          cp scripts/install.ps1 dist/install.ps1
+          chmod 755 dist/install.sh
+          (
+            cd dist
+            sha256sum ssh-usb-unlock-*.tar.gz ssh-usb-unlock-*.zip install.sh install.ps1 > SHA256SUMS.txt
+          )
+          cat dist/SHA256SUMS.txt
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${INPUT_TAG}" ]]; then
+            TAG="${INPUT_TAG}"
+          else
+            VER="$(grep -m1 '^version' ssh-usb-unlock/Cargo.toml | cut -d'"' -f2)"
+            TAG="v${VER}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ inputs.prerelease || false }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="$(mktemp)"
+          cat <<EOF > "$NOTES_FILE"
+          ## Instalación rápida (auto-instalable en tu directorio SSH)
+
+          ### macOS & Linux (\`~/.ssh/ssh-usb-unlock\`)
+          \`\`\`sh
+          curl -fsSL https://github.com/${REPO}/releases/download/${TAG}/install.sh | sh
+          \`\`\`
+
+          ### Windows (\`%USERPROFILE%\\.ssh\\ssh-usb-unlock.exe\`)
+          \`\`\`cmd
+          curl.exe -fsSL https://github.com/${REPO}/releases/download/${TAG}/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -
+          \`\`\`
+          *(o en PowerShell: \`irm https://github.com/${REPO}/releases/download/${TAG}/install.ps1 | iex\`)*
+
+          ## Vincular con la app (LittleKey)
+          \`\`\`sh
+          ssh-usb-unlock link
+          \`\`\`
+
+          Otros comandos disponibles: \`list\`, \`unlink <alias>\`, \`test <alias>\`, \`doctor\`, \`install\`, \`uninstall\`.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file "$NOTES_FILE"
+          else
+            EXTRA_ARGS=()
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              EXTRA_ARGS+=(--prerelease)
+            fi
+            gh release create "$TAG" dist/* \
+              --title "Zero-Trust SSH CLI ${TAG}" \
+              --notes-file "$NOTES_FILE" \
+              "${EXTRA_ARGS[@]}"
+          fi
