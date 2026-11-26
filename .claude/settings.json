@@ -1,0 +1,161 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-require-search.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-require-plan-schema.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-no-raw-search.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-require-thread.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10,
+            "if": "Bash(blast-search:*)"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-require-rtk.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-require-clear.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-require-clear.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-watch-start.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-version-check.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-watch-stop.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-telemetry-upload.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-goal-stop.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-config-change.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-instructions-loaded.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/blast-pre-compact.sh\"; [ -x \"$h\" ] || exit 0; exec \"$h\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(blast-search:*)",
+      "Bash(blast:*)",
+      "Bash(rtk:*)",
+      "Bash(rpgrep:*)"
+    ]
+  }
+}
