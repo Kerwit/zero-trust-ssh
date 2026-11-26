@@ -29,12 +29,12 @@ fi
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
   for pkg in ssh-usb-unlock sshd-epoch-auth; do
-    cargo clean -p "$pkg" "${RELEASE_FLAG[@]}" 2>/dev/null || true
+    cargo clean -p "$pkg" ${RELEASE_FLAG[@]+"${RELEASE_FLAG[@]}"} 2>/dev/null || true
   done
 else
   for target in "${TARGETS[@]}"; do
     for pkg in ssh-usb-unlock sshd-epoch-auth; do
-      cargo clean -p "$pkg" "${RELEASE_FLAG[@]}" --target "$target" 2>/dev/null || true
+      cargo clean -p "$pkg" ${RELEASE_FLAG[@]+"${RELEASE_FLAG[@]}"} --target "$target" 2>/dev/null || true
     done
   done
 fi

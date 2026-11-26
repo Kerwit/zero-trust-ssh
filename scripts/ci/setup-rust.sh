@@ -32,11 +32,13 @@ fi
 rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
 rustup default "$TOOLCHAIN"
 
-for target in "${TARGETS[@]}"; do
-  if [[ -n "$target" ]]; then
-    rustup target add "$target" --toolchain "$TOOLCHAIN"
-  fi
-done
+if [[ ${#TARGETS[@]} -gt 0 ]]; then
+  for target in "${TARGETS[@]}"; do
+    if [[ -n "$target" ]]; then
+      rustup target add "$target" --toolchain "$TOOLCHAIN"
+    fi
+  done
+fi
 
 sha256_short() {
   if command -v sha256sum >/dev/null 2>&1; then
