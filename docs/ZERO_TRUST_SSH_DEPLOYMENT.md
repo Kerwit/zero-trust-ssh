@@ -1,6 +1,6 @@
 # Guía de Implementación y Despliegue: Zero-Trust Stateless SSH
 
-Esta guía documenta paso a paso el proceso de despliegue, endurecimiento (hardening) y configuración extremo a extremo del sistema **Zero-Trust Stateless SSH** implementado entre la estación de trabajo (macOS) y el servidor Linux (`lnode`, IP: `192.168.1.33`).
+Esta guía documenta paso a paso el proceso de despliegue, endurecimiento (hardening) y configuración extremo a extremo del sistema **Zero-Trust Stateless SSH** entre una estación de trabajo cliente (macOS/Linux/Windows) y un servidor Linux (ejemplo: `myhost`, IP: `192.0.2.10`).
 
 ---
 
@@ -16,11 +16,11 @@ sequenceDiagram
     participant Unlock as ssh-usb-unlock (Cliente)
     participant Mobile as Enclave Móvil (USB 9422)
     participant Agent as ssh-agent (RAM local)
-    participant Server as Servidor sshd (192.168.1.33)
+    participant Server as Servidor sshd (192.0.2.10)
     participant AuthCmd as sshd-epoch-auth
 
-    Dev->>SSH: ssh lnode-server / IDE
-    SSH->>Unlock: Match exec (host lnode, user lnode, gen 1)
+    Dev->>SSH: ssh my-server / IDE
+    SSH->>Unlock: Match exec (host myhost, user ubuntu, gen 1)
     Unlock->>Agent: ¿Existe clave de esta época en RAM?
     alt Clave en caché (< 1h)
         Agent-->>Unlock: Sí (retorna en < 1ms)
@@ -42,11 +42,11 @@ sequenceDiagram
 
 ## 2. Fase 1: Hardening Base del Servidor Linux
 
-**Entorno detectado:**
-* **Sistema:** Ubuntu 26.04.1 LTS (`x86_64`, Kernel 7.0.0-43-generic)
-* **Hostname:** `lnode`
-* **IP:** `192.168.1.33`
-* **Usuario:** `lnode`
+**Entorno de referencia:**
+* **Sistema:** Ubuntu LTS (`x86_64` / `arm64`)
+* **Hostname:** `myhost`
+* **IP de ejemplo:** `192.0.2.10`
+* **Usuario:** `ubuntu`
 
 ### 2.1 Actualización del Sistema y Paquetes Base
 Se ejecutó la actualización desatendida y se instalaron herramientas esenciales de compilación y diagnóstico:
@@ -112,15 +112,19 @@ cargo zigbuild --bin sshd-epoch-auth --release --target x86_64-unknown-linux-mus
 
 ## 4. Fase 3: Despliegue de Zero-Trust SSH en el Servidor
 
-### 4.1 Transferencia de Archivos
+### 4.1 Opción A (Recomendada): Instalador automático del servidor vía GitHub Releases
+Ejecuta directamente en el servidor Linux (descarga el binario estático `sshd-epoch-auth` para `x86_64` o `arm64`, verifica `SHA256SUMS.txt` y aprovisiona OpenSSH):
+```bash
+curl -fsSL https://github.com/Kerwit/zero-trust-ssh/releases/latest/download/install-server.sh | sudo sh -s -- <SERVER_MASTER_HEX_64>
+```
+*(Para descargar o actualizar únicamente `/usr/local/bin/sshd-epoch-auth` sin tocar la configuración de `sshd`, añade `--binary-only`.)*
+
+### 4.2 Opción B (Manual): Transferencia de Archivos y Aprovisionamiento Local
 ```bash
 scp scripts/install_sshd_zero_trust.sh \
     target/x86_64-unknown-linux-musl/release/sshd-epoch-auth \
-    lnode@192.168.1.33:/tmp/
+    ubuntu@192.0.2.10:/tmp/
 ```
-
-### 4.2 Instalación y Aprovisionamiento Criptográfico
-Se invocó el instalador pasando el binario y el secreto `ServerMaster` de 64 caracteres hex:
 ```bash
 sudo /tmp/install_sshd_zero_trust.sh /tmp/sshd-epoch-auth <SERVER_MASTER_HEX_64>
 ```
@@ -157,13 +161,28 @@ sudo /tmp/install_sshd_zero_trust.sh /tmp/sshd-epoch-auth <SERVER_MASTER_HEX_64>
 
 ---
 
-## 5. Fase 4: Configuración del Cliente en macOS
+## 5. Fase 4: Configuración del Cliente (macOS / Linux / Windows)
 
-### 5.1 Registro de Huella del Host (`known_hosts`)
+### 5.1 Instalación rápida del CLI cliente (`ssh-usb-unlock`)
+En tu estación de trabajo (PC/Mac):
+```sh
+# macOS y Linux
+curl -fsSL https://github.com/Kerwit/zero-trust-ssh/releases/latest/download/install.sh | sh
+```
+```cmd
+# Windows (CMD / PowerShell)
+curl.exe -fsSL https://github.com/Kerwit/zero-trust-ssh/releases/latest/download/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -
+```
+Luego vincula el servidor de forma interactiva (actualiza `~/.ssh/config` y `~/.ssh/known_hosts` automáticamente):
+```sh
+ssh-usb-unlock link
+```
+
+### 5.2 Registro Manual de Huella del Host (`known_hosts`)
 Para evitar que las herramientas no interactivas (VS Code Remote SSH / IDEs) fallen con `Host key verification failed`:
 ```bash
-ssh-keyscan -H 192.168.1.33 >> ~/.ssh/known_hosts
-echo "lnode-server,192.168.1.33 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDHwIfkrrSeunNkFtScDwMIjcPk4DHi6RtRG97d42ejI" >> ~/.ssh/known_hosts
+ssh-keyscan -H 192.0.2.10 >> ~/.ssh/known_hosts
+echo "my-server,192.0.2.10 ssh-ed25519 <HOST_ED25519_PUBKEY>" >> ~/.ssh/known_hosts
 ```
 
 ### 5.2 Corrección de Detección de ADB en `ssh-usb-unlock`
@@ -196,15 +215,15 @@ cargo build --release -p ssh-usb-unlock
 ### 5.3 Configuración Canónica de `~/.ssh/config`
 Se estructuró el archivo `~/.ssh/config` para asegurar que el usuario y la generación coincidan con el Enclave Móvil:
 ```ssh
-Host lnode-server 192.168.1.33
-    HostName 192.168.1.33
-    User lnode
+Host my-server 192.0.2.10
+    HostName 192.0.2.10
+    User ubuntu
 
-Match host lnode-server,192.168.1.33 exec "/Users/theboss/kerwit/zero-trust-ssh/target/release/ssh-usb-unlock lnode lnode 1"
+Match host my-server,192.0.2.10 exec "~/.ssh/ssh-usb-unlock myhost ubuntu 1"
 ```
 
-* **`lnode` (1er argumento):** `host_id` registrado en el servidor (`/etc/hostname`).
-* **`lnode` (2do argumento):** Usuario de acceso SSH en el servidor.
+* **`myhost` (1er argumento):** `host_id` registrado en el servidor (`/etc/hostname`).
+* **`ubuntu` (2do argumento):** Usuario de acceso SSH en el servidor.
 * **`1` (3er argumento):** Número de generación de clave activa en la aplicación móvil.
 
 ---
@@ -217,13 +236,13 @@ ssh-add -l
 ```
 Salida esperada:
 ```
-256 SHA256:... trezor-epoch:lnode:lnode:498445 (ED25519)
+256 SHA256:... trezor-epoch:myhost:ubuntu:498445 (ED25519)
 ```
 
 ### Probar Conexión SSH
 ```bash
-ssh lnode-server "uptime"
-ssh 192.168.1.33 "uptime"
+ssh my-server "uptime"
+ssh 192.0.2.10 "uptime"
 ```
 
 ### Resolución de Incidencias Comunes

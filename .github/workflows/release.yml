@@ -107,6 +107,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           sh -n scripts/install.sh
+          sh -n scripts/install-server.sh
           bash -n scripts/ci/setup-rust.sh
           bash -n scripts/ci/clean-cargo-cache.sh
           bash -n scripts/ci/install-zig-tools.sh
@@ -124,7 +125,7 @@ jobs:
           ./target/debug/ssh-usb-unlock install --no-path
           test -x "$TMP_SSH/ssh-usb-unlock"
           "$TMP_SSH/ssh-usb-unlock" link \
-            --host 192.168.1.33 --port 22 --alias ci-srv \
+            --host 192.0.2.10 --port 22 --alias ci-srv \
             --host-id cisrv --user ubuntu --generation 1 \
             --skip-keyscan --skip-test --no-interactive
           "$TMP_SSH/ssh-usb-unlock" list | grep -q "ci-srv"
@@ -146,7 +147,7 @@ jobs:
             .\target\debug\ssh-usb-unlock.exe install --no-path
             $installed = Join-Path $tmpSsh "ssh-usb-unlock.exe"
             if (-not (Test-Path $installed)) { throw "Binary not installed at $installed" }
-            & $installed link --host 192.168.1.33 --port 22 --alias ci-srv --host-id cisrv --user ubuntu --generation 1 --skip-keyscan --skip-test --no-interactive
+            & $installed link --host 192.0.2.10 --port 22 --alias ci-srv --host-id cisrv --user ubuntu --generation 1 --skip-keyscan --skip-test --no-interactive
             $listed = & $installed list
             if (-not ($listed -match "ci-srv")) { throw "ci-srv not listed" }
             & $installed unlink ci-srv
@@ -226,7 +227,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           for TARGET in ${{ matrix.targets }}; do
-            echo "::group::Building ${TARGET}"
+            echo "::group::Building ssh-usb-unlock (${TARGET})"
             if [[ "${{ matrix.use_zig }}" == "true" ]]; then
               cargo zigbuild --release -p ssh-usb-unlock --target "$TARGET"
             else
@@ -236,6 +237,15 @@ jobs:
             chmod 755 "$BIN"
             tar -czf "dist/ssh-usb-unlock-${TARGET}.tar.gz" -C "target/${TARGET}/release" ssh-usb-unlock
             echo "::endgroup::"
+
+            if [[ "${{ matrix.platform }}" == "linux" ]]; then
+              echo "::group::Building sshd-epoch-auth (${TARGET})"
+              cargo zigbuild --release -p sshd-epoch-auth --target "$TARGET"
+              SRV_BIN="target/${TARGET}/release/sshd-epoch-auth"
+              chmod 755 "$SRV_BIN"
+              tar -czf "dist/sshd-epoch-auth-${TARGET}.tar.gz" -C "target/${TARGET}/release" sshd-epoch-auth
+              echo "::endgroup::"
+            fi
           done
 
       - name: Build & package Windows targets
@@ -259,7 +269,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ssh-usb-unlock-${{ matrix.platform }}
-          path: dist/ssh-usb-unlock-*.${{ matrix.archive_ext }}
+          path: |
+            dist/ssh-usb-unlock-*.${{ matrix.archive_ext }}
+            dist/sshd-epoch-auth-*.${{ matrix.archive_ext }}
           if-no-files-found: error
 
       - name: Clean workspace artifacts before cache save
@@ -316,8 +328,9 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           cp scripts/install.sh dist/install.sh
+          cp scripts/install-server.sh dist/install-server.sh
           cp scripts/install.ps1 dist/install.ps1
-          chmod 755 dist/install.sh
+          chmod 755 dist/install.sh dist/install-server.sh
 
           NEW_SUMS="$(mktemp)"
           EXISTING_SUMS="$(mktemp)"
@@ -325,7 +338,7 @@ jobs:
 
           (
             cd dist
-            FILES=(ssh-usb-unlock-*.tar.gz ssh-usb-unlock-*.zip install.sh install.ps1)
+            FILES=(ssh-usb-unlock-*.tar.gz ssh-usb-unlock-*.zip sshd-epoch-auth-*.tar.gz install.sh install-server.sh install.ps1)
             sha256sum "${FILES[@]}" > "$NEW_SUMS"
           )
 
@@ -356,7 +369,9 @@ jobs:
           set -euo pipefail
           NOTES_FILE="$(mktemp)"
           cat <<EOF > "$NOTES_FILE"
-          ## Instalación rápida (auto-instalable en tu directorio SSH)
+          ## Instalación del Cliente (\`ssh-usb-unlock\`)
+
+          Instala el CLI cliente en el directorio SSH de tu estación de trabajo (PC/Mac) para conectar con tu Enclave Móvil por USB.
 
           ### macOS & Linux (\`~/.ssh/ssh-usb-unlock\`)
           \`\`\`sh
@@ -369,7 +384,15 @@ jobs:
           \`\`\`
           *(o en PowerShell: \`irm https://github.com/${REPO}/releases/download/${TAG}/install.ps1 | iex\`)*
 
-          ## Vincular con la app (LittleKey)
+          ## Instalación del Servidor Linux (\`sshd-epoch-auth\`)
+
+          Instala el daemon \`AuthorizedKeysCommand\` en el servidor Linux (\`x86_64\` / \`arm64\`) y aprovisiona OpenSSH:
+          \`\`\`sh
+          curl -fsSL https://github.com/${REPO}/releases/download/${TAG}/install-server.sh | sudo sh -s -- <SERVER_MASTER_HEX_64>
+          \`\`\`
+          *(Para descargar o actualizar solo el binario sin modificar OpenSSH: añadir \`--binary-only\`.)*
+
+          ## Vincular con el Enclave Móvil
           \`\`\`sh
           ssh-usb-unlock link
           \`\`\`
