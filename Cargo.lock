@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-usb-unlock"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chacha20poly1305",
  "ed25519-dalek",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "sshd-epoch-auth"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "hex",

@@ -1,6 +1,6 @@
 [package]
 name = "sshd-epoch-auth"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Zero-Trust Stateless OpenSSH AuthorizedKeysCommand validator (60m HKDF-Ed25519)"
 
